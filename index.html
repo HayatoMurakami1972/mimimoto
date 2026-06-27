@@ -217,9 +217,11 @@ if(!settings.maskList) settings.maskList=[];
 if(!settings.model) settings.model='gemini-2.5-flash';
 
 let current=null, selectedRoles=[], recog=null, isRecording=false, wantRecording=false, interimEl=null, wakeLock=null;
-/* 音声認識の重複対策用 */
-let lastFinalText='', lastFinalAt=0, expectRestartDup=false;
-const DUP_WINDOW_MS=2500; /* 同一文言がこのms以内に再確定したら二重とみなす */
+const DUP_EXACT_LONG_MS=4500;
+const DUP_EXACT_SHORT_MS=1400;
+const DUP_OVERLAP_MS=2800;
+const DUP_SHORT_LEN=5;
+const DUP_OVERLAP_MIN_LEN=6;
 
 function load(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch(e){return fb;}}
 function persist(){try{localStorage.setItem(LS_MTG,JSON.stringify(meetings));}catch(e){toast('保存に失敗しました');}}
@@ -304,7 +306,69 @@ function createMeeting(){
   const m={id:uid(),title:title||'(無題)',purpose,roles:[...selectedRoles],status:'live',createdAt:now(),transcripts:[],feedbacks:[],summary:'',summaryStatus:'',summaryFormat:''};
   meetings.push(m); persist(); openMeeting(m.id);
 }
-function openMeeting(id){ const m=meetings.find(x=>x.id===id); if(!m) return; current=m; m.status==='live'?enterRec(m):enterDetail(m); }
+function speechKey(s){
+  return (s||'').normalize('NFKC').toLowerCase().replace(/[\s、。,.!！?？・「」『』（）()［］\[\]【】]/g,'');
+}
+function duplicateWindowFor(key){ return key.length<=DUP_SHORT_LEN?DUP_EXACT_SHORT_MS:DUP_EXACT_LONG_MS; }
+function cleanTranscriptList(list){
+  const out=[];
+  (list||[]).forEach(item=>{
+    if(!item||!item.text) return;
+    const cur={text:item.text,at:item.at||now()};
+    const curKey=speechKey(cur.text);
+    if(!curKey) return;
+    const prev=out[out.length-1];
+    if(!prev){ out.push(cur); return; }
+    const prevKey=speechKey(prev.text);
+    const dt=Math.abs(cur.at-(prev.at||0));
+    if(curKey===prevKey&&dt<=duplicateWindowFor(curKey)) return;
+    if(dt<=DUP_OVERLAP_MS&&Math.min(curKey.length,prevKey.length)>=DUP_OVERLAP_MIN_LEN){
+      if(curKey.includes(prevKey)&&curKey.length>prevKey.length){ out[out.length-1]=cur; return; }
+      if(prevKey.includes(curKey)) return;
+    }
+    out.push(cur);
+  });
+  return out;
+}
+function cleanMeetingTranscripts(m){
+  if(!m) return false;
+  const before=m.transcripts||[];
+  const after=cleanTranscriptList(before);
+  const changed=after.length!==before.length||after.some((t,i)=>!before[i]||t.text!==before[i].text||t.at!==before[i].at);
+  if(changed) m.transcripts=after;
+  return changed;
+}
+function cleanAllMeetingTranscripts(){
+  let changed=false;
+  meetings.forEach(m=>{ if(cleanMeetingTranscripts(m)) changed=true; });
+  if(changed) persist();
+}
+function storeFinalTranscript(text,at){
+  if(!current) return {action:'skipped'};
+  const item={text:text.trim(),at};
+  const key=speechKey(item.text);
+  if(!key) return {action:'skipped'};
+  const list=current.transcripts;
+  const prev=list[list.length-1];
+  if(prev){
+    const prevKey=speechKey(prev.text);
+    const dt=Math.abs(at-(prev.at||0));
+    if(key===prevKey&&dt<=duplicateWindowFor(key)) return {action:'skipped'};
+    if(dt<=DUP_OVERLAP_MS&&Math.min(key.length,prevKey.length)>=DUP_OVERLAP_MIN_LEN){
+      if(key.includes(prevKey)&&key.length>prevKey.length){
+        list[list.length-1]=item; persist(); return {action:'updated'};
+      }
+      if(prevKey.includes(key)) return {action:'skipped'};
+    }
+  }
+  list.push(item); persist(); return {action:'added'};
+}
+function openMeeting(id){
+  const m=meetings.find(x=>x.id===id); if(!m) return;
+  if(cleanMeetingTranscripts(m)) persist();
+  current=m;
+  m.status==='live'?enterRec(m):enterDetail(m);
+}
 
 /* ---- 録音 ---- */
 function enterRec(m){
@@ -329,40 +393,32 @@ function getRecognition(){
   const r=new SR(); r.lang='ja-JP'; r.continuous=true; r.interimResults=true;
   r.onresult=onResult;
   r.onerror=e=>{ if(e.error==='not-allowed'||e.error==='service-not-allowed'){ toast('マイクの使用が許可されていません'); wantRecording=false; setRecUI(false);} };
-  r.onend=()=>{ if(wantRecording){ expectRestartDup=true; try{r.start();}catch(e){ setTimeout(()=>{try{r.start();}catch(_){}} ,300);} } else { setRecUI(false);} };
+  r.onend=()=>{ if(wantRecording){ try{r.start();}catch(e){ setTimeout(()=>{try{r.start();}catch(_){}} ,300);} } else { setRecUI(false);} };
   return r;
 }
 function onResult(ev){
   let interim='';
+  let needsRender=false;
   for(let i=ev.resultIndex;i<ev.results.length;i++){
     const res=ev.results[i];
     if(res.isFinal){
       const text=res[0].transcript.trim();
-      if(text && !isDuplicateFinal(text)){
-        lastFinalText=text; lastFinalAt=now();
-        current.transcripts.push({text,at:lastFinalAt}); persist(); appendFinal(text);
+      if(text){
+        const at=now();
+        const saved=storeFinalTranscript(text,at);
+        if(saved.action==='added') appendFinal(text,at);
+        else if(saved.action==='updated') needsRender=true;
       }
-    }
-    else interim+=res[0].transcript;
+    }else interim+=res[0].transcript;
   }
+  if(needsRender) renderTranscript();
   showInterim(interim);
 }
-/* Chromeは continuous + 自動再起動の境目などで同じ確定結果を二重に返すことがある。
-   直前と同じ文言が「再起動直後」または「短時間内」に来た場合だけ重複として無視する。
-   時間を空けて意図的に同じ言葉を繰り返した場合は通常どおり登録される。 */
-function isDuplicateFinal(text){
-  if(text===lastFinalText){
-    if(expectRestartDup){ expectRestartDup=false; return true; }
-    if(now()-lastFinalAt < DUP_WINDOW_MS) return true;
-  }
-  expectRestartDup=false;
-  return false;
-}
-function appendFinal(text){
+function appendFinal(text,at){
   document.getElementById('recEmpty').style.display='none';
   if(interimEl){ interimEl.remove(); interimEl=null; }
   const div=document.createElement('div'); div.className='utt';
-  div.innerHTML='<time>'+fmtTime(now())+'</time>'+esc(maskText(text));
+  div.innerHTML='<time>'+fmtTime(at||now())+'</time>'+esc(maskText(text));
   document.getElementById('transcript').appendChild(div);
   document.getElementById('askBtn').disabled=false; scrollBottom();
 }
@@ -375,7 +431,6 @@ function toggleRec(){ isRecording?stopRec():startRec(); }
 function startRec(){
   if(!recog) recog=getRecognition();
   if(!recog){ toast('この端末は音声認識に未対応です（Chromeをお試しください）'); return; }
-  lastFinalText=''; lastFinalAt=0; expectRestartDup=false;
   wantRecording=true;
   try{ recog.start(); setRecUI(true); requestWake(); }catch(e){ setRecUI(true); }
 }
@@ -542,7 +597,7 @@ function mdToHtml(md){
 let toastTimer=null;
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('on'),2200); }
 
-(function init(){ loadSettingsUI(); renderMaskList(); renderList(); openView('list'); window.addEventListener('beforeunload',()=>{ if(isRecording) stopRec(); }); })();
+(function init(){ loadSettingsUI(); renderMaskList(); cleanAllMeetingTranscripts(); renderList(); openView('list'); window.addEventListener('beforeunload',()=>{ if(isRecording) stopRec(); }); })();
 </script>
 </body>
 </html>
