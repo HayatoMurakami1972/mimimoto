@@ -217,8 +217,7 @@ if(!settings.maskList) settings.maskList=[];
 if(!settings.model) settings.model='gemini-2.5-flash';
 
 let current=null, selectedRoles=[], recog=null, isRecording=false, wantRecording=false, interimEl=null, wakeLock=null;
-/* 音声認識の重複・フリーズ対策用 */
-let maxProcessedIndex = -1;
+let lastFinalText='', lastFinalAt=0;
 
 function load(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch(e){return fb;}}
 function persist(){try{localStorage.setItem(LS_MTG,JSON.stringify(meetings));}catch(e){toast('保存に失敗しました');}}
@@ -324,14 +323,31 @@ function renderTranscript(){
 }
 function scrollBottom(){ requestAnimationFrame(()=>window.scrollTo(0,document.body.scrollHeight)); }
 
-/* 修正点1: 録音のフリーズと無限ループを防ぐインデックス管理 */
+/* V3: 感度を元に戻しつつ、重複バグとフリーズだけを防止するロジック */
 function getRecognition(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR) return null;
   const r=new SR(); r.lang='ja-JP'; r.continuous=true; r.interimResults=true;
-  r.onstart = () => { maxProcessedIndex = -1; };
   r.onresult=onResult;
-  r.onerror=e=>{ if(e.error==='not-allowed'||e.error==='service-not-allowed'){ toast('マイクの使用が許可されていません'); wantRecording=false; setRecUI(false);} };
-  r.onend=()=>{ if(wantRecording){ setTimeout(()=>{try{r.start();}catch(_){}} ,300); } else { setRecUI(false);} };
+  r.onerror=e=>{ 
+    if(e.error==='not-allowed'||e.error==='service-not-allowed'){ 
+      toast('マイクの使用が許可されていません'); wantRecording=false; setRecUI(false);
+    } 
+  };
+  r.onend=()=>{ 
+    if(wantRecording){ 
+      // ブラウザのバッファ詰まりを防ぐため、少し間を空けてから確実に再起動
+      setTimeout(()=>{ 
+        try { 
+          if(wantRecording) r.start(); 
+        } catch(e) {
+          // start()が衝突した場合はもう一度だけリトライして完全停止を防ぐ
+          setTimeout(()=>{ try{ if(wantRecording) r.start(); }catch(_){} }, 1000);
+        }
+      }, 400); 
+    } else { 
+      setRecUI(false);
+    } 
+  };
   return r;
 }
 
@@ -340,20 +356,19 @@ function onResult(ev){
   for(let i=ev.resultIndex;i<ev.results.length;i++){
     const res=ev.results[i];
     if(res.isFinal){
-      /* 修正点: ブラウザが暴走して同じ箇所を投げ続けてもシャットアウトする */
-      if(i > maxProcessedIndex){
-        maxProcessedIndex = i;
-        const text=res[0].transcript.trim();
-        if(text){
-          current.transcripts.push({text,at:now()}); persist(); appendFinal(text);
+      const text=res[0].transcript.trim();
+      if(text){
+        // 重複防止ロジック: 直前と【全く同じテキスト】が【2秒以内】に来た場合のみ無視する
+        // これにより、感度を保ちつつ「同じログが何度も出る」バグだけをブロックします
+        const isDup = (text === lastFinalText && (now() - lastFinalAt < 2000));
+        if(!isDup){
+          lastFinalText = text;
+          lastFinalAt = now();
+          current.transcripts.push({text,at:lastFinalAt}); persist(); appendFinal(text);
         }
       }
     }
-    else {
-      if(i >= maxProcessedIndex){
-        interim+=res[0].transcript;
-      }
-    }
+    else interim+=res[0].transcript;
   }
   showInterim(interim);
 }
@@ -376,6 +391,7 @@ function startRec(){
   if(!recog) recog=getRecognition();
   if(!recog){ toast('この端末は音声認識に未対応です（Chromeをお試しください）'); return; }
   wantRecording=true;
+  lastFinalText=''; lastFinalAt=0;
   try{ recog.start(); setRecUI(true); requestWake(); }catch(e){ setRecUI(true); }
 }
 function stopRec(){ wantRecording=false; isRecording=false; try{recog&&recog.stop();}catch(e){} setRecUI(false); releaseWake(); }
@@ -406,7 +422,6 @@ async function askFeedback(){
   const recent=current.transcripts.slice(-RECENT_LIMIT).map(t=>maskText(t.text)).join('\n');
   const roleList=roles.map(r=>'- '+roleLabel(r)+': '+rolePersp(r)).join('\n');
   const ctx=current.purpose?'\n会議の目的: '+maskText(current.purpose)+'\n':'';
-  /* 修正点2: 問題点や確認が必要な内容をその場で出させるプロンプトへ最適化 */
   const sys='あなたは会議に同席する優秀なアシスタントです。直近の会話を読み、指定された各ロールの視点から、会議を有利に進めるための簡潔なフィードバックを返してください。'+ctx+'\n出力は必ず次の形式を厳守し、各ロールごとにブロックを作ってください。前置き・締めの文章は不要です。\n\n### ロール名\n- 問題点 / 確認が必要な事項: 1〜2個\n- リスク: 該当があれば（なければ「特になし」）\n- 次の一手: そのロールとして取るべきアクション 1〜2個\n\n対象ロール:\n'+roleList;
   const user='直近の会話ログ:\n'+recent;
   try{
@@ -456,7 +471,6 @@ async function generateMinutes(format){
   const memo=current.feedbacks.map(f=>maskText(f.raw)).join('\n---\n');
   const ctx=current.purpose?'会議の目的: '+maskText(current.purpose)+'\n':'';
   let sys;
-  /* 修正点3: 終了時に「次回打ち合わせが必要な内容や問題点」を抽出させる */
   if(format==='simple'){
     sys='あなたは議事録作成の専門家です。会話ログから、社内共有用の簡易議事録をMarkdownで作成してください。'+ctx
       +'\n次の形式を厳守し、各項目は箇条書きで簡潔に（1項目1〜2行）:\n'
