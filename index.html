@@ -180,9 +180,11 @@
       <b>モデル名</b><br>
       gemini-2.0-flash は2026年9月に停止予定です。<code>gemini-2.5-flash</code> など現行のFlash系を指定してください。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">キー取得はこちら</a>。<br><br>
       <b>音声について（重要）</b><br>
-      文字起こしのWeb Speech APIは音声をGoogleの認識サーバーに送ります。これは匿名化の<b>前段</b>なのでマスクできません。極秘の音声を扱う場では使わない判断を。<br><br>
+      文字起こしは録音した音声を<b>Gemini API</b>へ送って行います（約10秒ごと）。音声そのものは匿名化の<b>前段</b>なのでマスクできません。極秘の音声を扱う場では使わない判断を。文字起こし後のテキストには匿名化が適用されます。<br><br>
+      <b>料金</b><br>
+      文字起こしと提案・議事録でGeminiのトークンを消費します。長い会議ほど課金が増えます。約10秒ごとに音声を送る設計です。<br><br>
       <b>動かない時</b><br>
-      Chrome（Android）が安定。マイクとネット接続が必要です。ホーム画面に追加するとアプリのように使えます。
+      Gemini APIキーが必須です。マイク許可と通信が必要で、HTTPSまたはローカル（localhost / file）で開いてください。Chromeが安定。ホーム画面に追加するとアプリのように使えます。
     </div>
   </main>
 </div>
@@ -216,12 +218,12 @@ let settings=load(LS_SET,{key:'',model:'gemini-2.5-flash',maskList:[]});
 if(!settings.maskList) settings.maskList=[];
 if(!settings.model) settings.model='gemini-2.5-flash';
 
-let current=null, selectedRoles=[], recog=null, isRecording=false, wantRecording=false, interimEl=null, wakeLock=null, lastBubbleEl=null;
+let current=null, selectedRoles=[], isRecording=false, wantRecording=false, interimEl=null, wakeLock=null, lastBubbleEl=null;
 
-/* ---- 発言のまとめ方（細切れ防止） ---- */
-const MERGE_GAP_MS=4000;   // 直前の発言からこの時間以内に続いた認識結果は同じ発言にまとめる
-const MAX_MERGE_LEN=140;   // 1つの発言がこの文字数を超えたら次は新しい発言にする
-const SENT_END=/[。．.!！?？…]$/;  // 文末で終わっていたら区切る
+/* ---- 録音（Web Audio → Geminiで文字起こし） ---- */
+const CHUNK_MS=10000;      // この間隔ごとに音声をまとめてGeminiへ送る（短いほど即時、API回数は増える）
+const TARGET_SR=16000;     // 送信サンプリングレート（16kHzモノラル）
+let audioCtx=null, srcNode=null, procNode=null, micStream=null, sampleBuf=[], chunkTimer=null, chunkStartAt=0;
 
 function load(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch(e){return fb;}}
 function persist(){try{localStorage.setItem(LS_MTG,JSON.stringify(meetings));}catch(e){toast('保存に失敗しました');}}
@@ -266,7 +268,7 @@ function renderMaskList(){
 function maskStatusLine(){
   const n=(settings.maskList||[]).length;
   const el=document.getElementById('maskStatus');
-  el.innerHTML = (n>0?'🔒 <b>'+n+'件</b>を匿名化中':'🔓 匿名化なし（設定で登録できます）')+' ・ 音声認識はGoogle経由';
+  el.innerHTML = (n>0?'🔒 <b>'+n+'件</b>を匿名化中':'🔓 匿名化なし（設定で登録できます）')+' ・ 文字起こしはGemini経由';
 }
 
 /* ---- 画面遷移 ---- */
@@ -328,65 +330,56 @@ function renderTranscript(){
   scrollBottom();
 }
 function scrollBottom(){ requestAnimationFrame(()=>window.scrollTo(0,document.body.scrollHeight)); }
-function getRecognition(){
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR) return null;
-  const r=new SR(); r.lang='ja-JP'; r.continuous=true; r.interimResults=true;
-  r.onresult=onResult;
-  r.onerror=e=>{ if(e.error==='not-allowed'||e.error==='service-not-allowed'){ toast('マイクの使用が許可されていません'); wantRecording=false; setRecUI(false);} };
-  r.onend=()=>{ if(wantRecording){ try{r.start();}catch(e){ setTimeout(()=>{try{r.start();}catch(_){}} ,300);} } else { setRecUI(false);} };
-  return r;
+/* 文字起こし結果を1件追加（時刻順を保って表示更新） */
+function addTranscript(text,at){
+  if(!text||!current) return;
+  current.transcripts.push({text:text.trim(),at:at||now()});
+  current.transcripts.sort((a,b)=>a.at-b.at);
+  persist();
+  if(document.getElementById('view-rec').classList.contains('active')) renderTranscript();
+  const ab=document.getElementById('askBtn'); if(ab) ab.disabled=current.transcripts.length===0;
 }
-function onResult(ev){
-  let interim='';
-  for(let i=ev.resultIndex;i<ev.results.length;i++){
-    const res=ev.results[i];
-    if(res.isFinal){ const text=res[0].transcript.trim(); if(text){ commitFinal(text); } }
-    else interim+=res[0].transcript;
-  }
-  showInterim(interim);
+
+/* ---- 文字起こしキュー（順番を保ってGeminiへ送る） ---- */
+let tQueue=[], tBusy=false;
+function enqueueChunk(blob,at){ tQueue.push({blob,at}); updateTranscribeHint(); pumpQueue(); }
+async function pumpQueue(){
+  if(tBusy||tQueue.length===0) return;
+  tBusy=true; const job=tQueue.shift();
+  try{
+    const b64=await blobToBase64(job.blob);
+    const text=await callGeminiAudio(b64,'audio/wav');
+    if(text&&text.trim()) addTranscript(text,job.at);
+  }catch(e){ toast('文字起こし失敗: '+(e.message||e)); }
+  tBusy=false; updateTranscribeHint();
+  if(tQueue.length) pumpQueue();
 }
-/* 認識結果を1発言にまとめるか、新しい発言にするかを判断する */
-function commitFinal(text){
-  const t=now();
-  const arr=current.transcripts;
-  const last=arr.length?arr[arr.length-1]:null;
-  const lastT=last?(last.last||last.at):0;
-  const canMerge = last && (t-lastT)<MERGE_GAP_MS && !SENT_END.test(last.text) && last.text.length<MAX_MERGE_LEN;
-  if(canMerge){
-    last.text=joinJa(last.text,text);
-    last.last=t;
-    persist();
-    refreshLastBubble();
-  }else{
-    arr.push({text,at:t,last:t});
-    persist();
-    appendFinal(text);
-  }
-  document.getElementById('askBtn').disabled=false;
+function updateTranscribeHint(){
+  const n=tQueue.length+(tBusy?1:0);
+  if(n>0&&isRecording) showInterim('🖊 文字起こし中…（残り'+n+'）');
+  else showInterim('');
 }
-/* 日本語は基本そのまま連結。英数字どうしの境界だけ半角スペースを補う */
-function joinJa(a,b){
-  if(!a) return b; if(!b) return a;
-  if(/[A-Za-z0-9]$/.test(a)&&/^[A-Za-z0-9]/.test(b)) return a+' '+b;
-  return a+b;
+function blobToBase64(blob){
+  return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=rej; r.readAsDataURL(blob); });
 }
-function appendFinal(text){
-  document.getElementById('recEmpty').style.display='none';
-  if(interimEl){ interimEl.remove(); interimEl=null; }
-  const last=current.transcripts[current.transcripts.length-1];
-  const div=document.createElement('div'); div.className='utt';
-  div.innerHTML='<time>'+fmtTime(last?last.at:now())+'</time>'+esc(maskText(text));
-  document.getElementById('transcript').appendChild(div);
-  lastBubbleEl=div;
-  document.getElementById('askBtn').disabled=false; scrollBottom();
+
+/* ---- 音声を16kHzモノラルのWAVにして送る ---- */
+function mergeFloat32(arrs){ let len=0; arrs.forEach(a=>len+=a.length); const out=new Float32Array(len); let o=0; arrs.forEach(a=>{out.set(a,o);o+=a.length;}); return out; }
+function downsample(buf,inRate,outRate){
+  if(outRate>=inRate) return buf;
+  const ratio=inRate/outRate, newLen=Math.round(buf.length/ratio), res=new Float32Array(newLen);
+  let oi=0, ib=0;
+  while(oi<newLen){ const nextI=Math.round((oi+1)*ratio); let sum=0,c=0; for(let i=ib;i<nextI&&i<buf.length;i++){sum+=buf[i];c++;} res[oi]=c?sum/c:0; oi++; ib=nextI; }
+  return res;
 }
-/* まとめ中の発言バブルを最新テキストで描き直す */
-function refreshLastBubble(){
-  const last=current.transcripts[current.transcripts.length-1];
-  if(!last){ return; }
-  if(!lastBubbleEl){ renderTranscript(); return; }
-  lastBubbleEl.innerHTML='<time>'+fmtTime(last.at)+'</time>'+esc(maskText(last.text));
-  scrollBottom();
+function encodeWav(buf,inRate,outRate){
+  const data=downsample(buf,inRate,outRate), sr=outRate, dv=new DataView(new ArrayBuffer(44+data.length*2));
+  const w=(off,s)=>{ for(let i=0;i<s.length;i++) dv.setUint8(off+i,s.charCodeAt(i)); };
+  w(0,'RIFF'); dv.setUint32(4,36+data.length*2,true); w(8,'WAVE'); w(12,'fmt '); dv.setUint32(16,16,true);
+  dv.setUint16(20,1,true); dv.setUint16(22,1,true); dv.setUint32(24,sr,true); dv.setUint32(28,sr*2,true);
+  dv.setUint16(32,2,true); dv.setUint16(34,16,true); w(36,'data'); dv.setUint32(40,data.length*2,true);
+  let off=44; for(let i=0;i<data.length;i++){ let s=Math.max(-1,Math.min(1,data[i])); dv.setInt16(off,s<0?s*0x8000:s*0x7FFF,true); off+=2; }
+  return new Blob([dv],{type:'audio/wav'});
 }
 function showInterim(text){
   if(!text){ if(interimEl){interimEl.remove();interimEl=null;} return; }
@@ -394,14 +387,53 @@ function showInterim(text){
   interimEl.textContent=maskText(text); scrollBottom();
 }
 function toggleRec(){ isRecording?stopRec():startRec(); }
-function startRec(){
-  if(!recog) recog=getRecognition();
-  if(!recog){ toast('この端末は音声認識に未対応です（Chromeをお試しください）'); return; }
-  wantRecording=true;
-  try{ recog.start(); setRecUI(true); requestWake(); }catch(e){ setRecUI(true); }
+async function startRec(){
+  if(!geminiReady()){ toast('録音にはGemini APIキーが必要です'); openView('settings'); return; }
+  try{
+    micStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+  }catch(e){ toast('マイクを使用できません（許可とHTTPS/ローカルが必要）'); return; }
+  try{
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==='suspended') await audioCtx.resume();
+    srcNode=audioCtx.createMediaStreamSource(micStream);
+    procNode=audioCtx.createScriptProcessor(4096,1,1);
+    sampleBuf=[];
+    procNode.onaudioprocess=e=>{ if(!wantRecording) return; sampleBuf.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+    const mute=audioCtx.createGain(); mute.gain.value=0;   // スピーカーへは出さない（ハウリング防止）
+    srcNode.connect(procNode); procNode.connect(mute); mute.connect(audioCtx.destination);
+  }catch(e){ toast('音声の取得に失敗しました: '+(e.message||e)); try{micStream.getTracks().forEach(t=>t.stop());}catch(_){}; return; }
+  wantRecording=true; chunkStartAt=now();
+  chunkTimer=setInterval(()=>flushChunk(false),CHUNK_MS);
+  setRecUI(true); requestWake();
 }
-function stopRec(){ wantRecording=false; isRecording=false; try{recog&&recog.stop();}catch(e){} setRecUI(false); releaseWake(); }
-function setRecUI(on){ isRecording=on; document.getElementById('recBtn').classList.toggle('on',on); document.getElementById('recLabel').textContent=on?'録音中 — タップで停止':'録音を開始'; }
+/* たまった音声を1チャンクとしてWAV化し、文字起こしキューへ送る */
+function flushChunk(){
+  if(!audioCtx||sampleBuf.length===0) return;
+  const merged=mergeFloat32(sampleBuf); sampleBuf=[];
+  const at=chunkStartAt; chunkStartAt=now();
+  if(merged.length<audioCtx.sampleRate*0.4) return;  // 0.4秒未満は無音扱いで送らない
+  try{ enqueueChunk(encodeWav(merged,audioCtx.sampleRate,TARGET_SR),at); }catch(e){}
+}
+function stopRec(){
+  wantRecording=false; isRecording=false;
+  if(chunkTimer){ clearInterval(chunkTimer); chunkTimer=null; }
+  flushChunk(true);  // 残りの音声も送る
+  try{ procNode&&procNode.disconnect(); }catch(e){}
+  try{ srcNode&&srcNode.disconnect(); }catch(e){}
+  try{ micStream&&micStream.getTracks().forEach(t=>t.stop()); }catch(e){}
+  try{ audioCtx&&audioCtx.close(); }catch(e){}
+  audioCtx=null; srcNode=null; procNode=null; micStream=null;
+  setRecUI(false); releaseWake();
+}
+function setRecUI(on){
+  isRecording=on;
+  document.getElementById('recBtn').classList.toggle('on',on);
+  document.getElementById('recLabel').textContent=on?'録音中 — タップで停止':'録音を開始';
+  const empty=document.getElementById('recEmpty');
+  if(empty&&(!current||current.transcripts.length===0)){
+    empty.textContent=on?'● 録音中… 約10秒ごとに文字起こしが表示されます':'▶ ボタンを押すと文字起こしが始まります';
+  }
+}
 async function requestWake(){ try{ if('wakeLock' in navigator){ wakeLock=await navigator.wakeLock.request('screen'); } }catch(e){} }
 function releaseWake(){ try{ wakeLock&&wakeLock.release(); wakeLock=null; }catch(e){} }
 document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'&&isRecording) requestWake(); });
@@ -412,6 +444,20 @@ async function callGemini(systemText,userText){
   const model=(settings.model||'gemini-2.5-flash').trim();
   const url='https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(settings.key.trim());
   const body={ systemInstruction:{parts:[{text:systemText}]}, contents:[{role:'user',parts:[{text:userText}]}], generationConfig:{temperature:0.4,maxOutputTokens:1500} };
+  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!res.ok){ const t=await res.text().catch(()=> ''); throw new Error('API '+res.status+' '+t.slice(0,160)); }
+  const data=await res.json();
+  const parts=data&&data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts||[];
+  return parts.map(p=>p.text||'').join('').trim();
+}
+/* 音声チャンクをGeminiで文字起こし */
+async function callGeminiAudio(b64,mime){
+  const model=(settings.model||'gemini-2.5-flash').trim();
+  const url='https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(settings.key.trim());
+  const sys='あなたは高精度な日本語の音声文字起こしエンジンです。受け取った音声を、聞こえたとおりに自然な日本語の文章として書き起こしてください。話者名・時刻・記号・注釈・前置きは一切付けず、本文だけを出力します。雑音や無音だけで内容が無い場合は、何も出力せず空にしてください。';
+  const body={ systemInstruction:{parts:[{text:sys}]},
+    contents:[{role:'user',parts:[{inlineData:{mimeType:mime,data:b64}},{text:'この音声を文字起こししてください。'}]}],
+    generationConfig:{temperature:0,maxOutputTokens:1200} };
   const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(!res.ok){ const t=await res.text().catch(()=> ''); throw new Error('API '+res.status+' '+t.slice(0,160)); }
   const data=await res.json();
@@ -461,10 +507,16 @@ function switchTab(role){
 }
 function closeSheet(){ document.getElementById('sheetMask').classList.remove('on'); document.getElementById('sheet').classList.remove('on'); }
 
+/* 文字起こしキューが空になるまで待つ */
+function drainQueue(){
+  return new Promise(res=>{ const check=()=>{ if(!tBusy&&tQueue.length===0) return res(); setTimeout(check,300); }; check(); });
+}
+
 /* ---- 議事録（簡易 / 詳細） ---- */
 async function endMeeting(){
-  if(current.transcripts.length===0){ if(!confirm('発言がありません。終了しますか？')) return; }
   if(isRecording) stopRec();
+  if(tBusy||tQueue.length>0){ toast('🖊 文字起こしを仕上げています…'); await drainQueue(); }
+  if(current.transcripts.length===0){ if(!confirm('発言がありません。終了しますか？')) return; }
   current.status='done'; persist();
   if(!geminiReady()){ current.summaryStatus='none'; persist(); enterDetail(current); toast('議事録の自動生成にはGeminiキーが必要です'); return; }
   await generateMinutes('simple');
