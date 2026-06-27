@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#2F5D4E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>mimimoto — その場で効く議事録</title>
+<style>
+  :root{
+    --paper:#F4F2EC; --card:#FCFBF8; --ink:#1B1C18; --ink-soft:#54564E; --line:#E2DFD5;
+    --go:#2F5D4E; --go-press:#264C40; --advice:#9A5B16; --advice-bg:#FBF0DF; --live:#C4392B;
+    --shadow:0 1px 2px rgba(27,28,24,.06),0 8px 24px rgba(27,28,24,.06);
+    --safe-b:env(safe-area-inset-bottom,0px); --safe-t:env(safe-area-inset-top,0px);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0;height:100%}
+  body{background:var(--paper);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Hiragino Sans","Noto Sans JP","Yu Gothic",sans-serif;
+    font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased;overscroll-behavior-y:none;}
+  .app{max-width:560px;margin:0 auto;min-height:100%;display:flex;flex-direction:column}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  input,textarea,select{font-family:inherit;font-size:16px}
+  .top{position:sticky;top:0;z-index:30;background:rgba(244,242,236,.92);
+    backdrop-filter:saturate(140%) blur(8px);border-bottom:1px solid var(--line);
+    padding:calc(var(--safe-t) + 12px) 18px 12px;display:flex;align-items:center;gap:12px;min-height:56px;}
+  .top .back{font-size:15px;color:var(--go);font-weight:600;display:flex;align-items:center;gap:4px;margin-left:-4px}
+  .brand{font-weight:800;letter-spacing:.04em;font-size:18px}
+  .brand small{font-weight:600;color:var(--ink-soft);font-size:11px;letter-spacing:.12em;display:block;margin-top:-2px}
+  .top .spacer{flex:1}
+  .iconbtn{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;color:var(--ink-soft);border:1px solid transparent}
+  .iconbtn:active{background:var(--line)}
+  .view{flex:1;padding:18px 18px calc(28px + var(--safe-b));display:none;animation:fade .25s ease}
+  .view.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .lead{color:var(--ink-soft);font-size:14px;margin:2px 0 18px}
+  .mtg-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:var(--shadow);display:block;width:100%;text-align:left;}
+  .mtg-card:active{transform:scale(.99)}
+  .mtg-card h3{margin:0 0 4px;font-size:16.5px;font-weight:700;display:flex;align-items:center;gap:8px}
+  .mtg-card .meta{color:var(--ink-soft);font-size:12.5px;display:flex;gap:10px;flex-wrap:wrap}
+  .badge{font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;letter-spacing:.03em}
+  .badge.live{background:#FBE3DF;color:var(--live)}
+  .badge.done{background:#E4EDE8;color:var(--go)}
+  .empty{text-align:center;color:var(--ink-soft);padding:64px 20px}
+  .empty .big{font-size:40px;margin-bottom:10px}
+  .field{margin-bottom:18px}
+  .field label{display:block;font-weight:700;font-size:13.5px;margin-bottom:7px;letter-spacing:.02em}
+  .field .hint{font-weight:500;color:var(--ink-soft);font-size:12px}
+  .field input[type=text],.field textarea,.field select{width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 14px;color:var(--ink);outline:none;transition:border .15s;}
+  .field input:focus,.field textarea:focus,.field select:focus{border-color:var(--go)}
+  .field textarea{resize:vertical;min-height:76px;line-height:1.6}
+  .roles{display:flex;flex-wrap:wrap;gap:9px}
+  .role-chip{border:1.5px solid var(--line);background:var(--card);border-radius:999px;padding:9px 15px;font-size:14px;font-weight:600;color:var(--ink-soft);transition:.12s;}
+  .role-chip.on{border-color:var(--go);background:#E9F0EC;color:var(--go)}
+  .role-chip:active{transform:scale(.96)}
+  .btn{width:100%;background:var(--go);color:#fff;font-weight:700;font-size:16px;padding:15px;border-radius:14px;box-shadow:var(--shadow);letter-spacing:.02em;}
+  .btn:active{background:var(--go-press)}
+  .btn.ghost{background:transparent;color:var(--go);box-shadow:none;border:1.5px solid var(--line)}
+  .btn.danger{background:transparent;color:var(--live);box-shadow:none;border:1.5px solid #E8C9C4}
+  .btn[disabled]{opacity:.45;pointer-events:none}
+  .rec-purpose{font-size:12.5px;color:var(--ink-soft);background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 13px;margin-bottom:10px}
+  .mask-status{font-size:12px;color:var(--ink-soft);margin-bottom:14px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .mask-status b{color:var(--advice)}
+  .transcript{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+  .utt{background:var(--card);border:1px solid var(--line);border-radius:12px 12px 12px 4px;padding:10px 13px;font-size:15.5px;line-height:1.65;animation:fade .2s ease}
+  .utt time{display:block;font-size:11px;color:var(--ink-soft);margin-bottom:2px;letter-spacing:.04em}
+  .utt.interim{opacity:.6;border-style:dashed;font-style:italic}
+  .rec-empty{color:var(--ink-soft);font-size:14px;text-align:center;padding:40px 10px}
+  .reczone{position:sticky;bottom:0;z-index:20;background:linear-gradient(to top,var(--paper) 70%,transparent);padding:14px 18px calc(10px + var(--safe-b));margin:0 -18px}
+  .reczone-inner{display:flex;gap:10px;align-items:center}
+  .recbtn{flex:1;background:var(--go);color:#fff;font-weight:800;font-size:16px;padding:16px;border-radius:16px;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:var(--shadow)}
+  .recbtn.on{background:var(--live)}
+  .recbtn:active{transform:scale(.98)}
+  .dot{width:11px;height:11px;border-radius:50%;background:#fff}
+  .recbtn.on .dot{animation:pulse 1.1s infinite}
+  @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.7)}}
+  .askbtn{background:var(--advice-bg);color:var(--advice);font-weight:800;font-size:14px;padding:16px 18px;border-radius:16px;border:1.5px solid #EBD6B6;white-space:nowrap}
+  .askbtn:active{transform:scale(.97)}
+  .askbtn[disabled]{opacity:.4;pointer-events:none}
+  .sheet-mask{position:fixed;inset:0;background:rgba(27,28,24,.28);z-index:40;display:none;animation:fade .2s}
+  .sheet-mask.on{display:block}
+  .sheet{position:fixed;left:0;right:0;bottom:0;z-index:50;max-width:560px;margin:0 auto;background:var(--paper);border-radius:22px 22px 0 0;box-shadow:0 -8px 40px rgba(27,28,24,.18);transform:translateY(100%);transition:transform .28s cubic-bezier(.32,.72,0,1);max-height:82vh;display:flex;flex-direction:column;padding-bottom:var(--safe-b)}
+  .sheet.on{transform:translateY(0)}
+  .sheet-grab{width:38px;height:4px;background:var(--line);border-radius:99px;margin:10px auto 4px}
+  .sheet-head{padding:6px 20px 12px;display:flex;align-items:center;gap:8px}
+  .sheet-head h2{margin:0;font-size:16px;font-weight:800}
+  .sheet-head .x{margin-left:auto;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;color:var(--ink-soft)}
+  .tabs{display:flex;gap:7px;padding:0 18px 10px;overflow-x:auto}
+  .tab{flex:0 0 auto;padding:8px 15px;border-radius:999px;background:var(--card);border:1.5px solid var(--line);font-weight:700;font-size:13.5px;color:var(--ink-soft)}
+  .tab.on{background:var(--advice);color:#fff;border-color:var(--advice)}
+  .sheet-body{overflow-y:auto;padding:4px 20px 24px;-webkit-overflow-scrolling:touch}
+  .advice-block{display:none}
+  .advice-block.on{display:block;animation:fade .2s}
+  .md{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--shadow)}
+  .md h1{font-size:19px;margin:.2em 0 .5em;border-bottom:2px solid var(--line);padding-bottom:.3em}
+  .md h2{font-size:16px;margin:1.1em 0 .4em;color:var(--go)}
+  .md h3{font-size:14.5px;margin:.9em 0 .3em}
+  .md ul{padding-left:1.25em;margin:.4em 0}
+  .md li{margin:.25em 0}
+  .md p{margin:.5em 0}
+  .md strong{font-weight:700}
+  .md code{background:#EFEDE6;padding:1px 5px;border-radius:5px;font-size:.9em}
+  .gen-wait{display:flex;align-items:center;gap:10px;color:var(--ink-soft);font-size:14px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .spin{width:18px;height:18px;border:2.5px solid var(--line);border-top-color:var(--go);border-radius:50%;animation:rot .8s linear infinite}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  .section-h{font-size:12px;font-weight:800;letter-spacing:.12em;color:var(--ink-soft);margin:24px 0 10px}
+  .fmt-tag{font-size:11px;font-weight:700;color:var(--advice);background:var(--advice-bg);border:1px solid #EBD6B6;border-radius:999px;padding:2px 10px;margin-left:8px}
+  .note{font-size:12.5px;color:var(--ink-soft);line-height:1.7;background:#EAF0EC;border:1px solid #D3E0D8;border-radius:12px;padding:13px 15px;margin-top:14px}
+  .note a{color:var(--go);font-weight:600}
+  .note b{color:var(--ink)}
+  .mask-row{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin-bottom:7px}
+  .mask-sym{font-weight:800;color:var(--advice);min-width:40px}
+  .mask-term{flex:1;font-size:14.5px;word-break:break-all}
+  .mask-del{color:var(--live);font-size:13px;font-weight:600;padding:4px 8px}
+  .toast{position:fixed;left:50%;bottom:calc(28px + var(--safe-b));transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;padding:11px 20px;border-radius:99px;font-size:13.5px;font-weight:600;opacity:0;transition:.25s;z-index:90;pointer-events:none}
+  .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+  .fab{position:fixed;right:max(18px,calc(50% - 280px + 18px));bottom:calc(22px + var(--safe-b));z-index:25;background:var(--go);color:#fff;width:58px;height:58px;border-radius:18px;display:grid;place-items:center;box-shadow:0 6px 20px rgba(47,93,78,.35);font-size:28px;font-weight:300}
+  .fab:active{transform:scale(.94)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <button class="back" id="backBtn" style="display:none" onclick="goList()">‹ 一覧</button>
+    <div id="brand" class="brand">mimimoto<small>その場で効く議事録</small></div>
+    <div class="spacer"></div>
+    <button class="iconbtn" id="settingsBtn" onclick="openView('settings')" aria-label="設定">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </header>
+
+  <main class="view active" id="view-list">
+    <p class="lead">録音すると、その場で「次に聞くべきこと」を提案。終わると簡易議事録を自動でまとめます。</p>
+    <div id="mtgList"></div>
+  </main>
+
+  <main class="view" id="view-new">
+    <div class="field"><label>タイトル</label><input type="text" id="f-title" placeholder="例）週次定例／空家調査 進捗"></div>
+    <div class="field"><label>会議の目的 <span class="hint">— 提案の的中率が上がります（任意）</span></label>
+      <textarea id="f-purpose" placeholder="例）今週の進捗確認と来週の段取りを決める。"></textarea></div>
+    <div class="field"><label>助言してほしい視点 <span class="hint">— 複数選択可</span></label><div class="roles" id="roleChips"></div></div>
+    <button class="btn" onclick="createMeeting()">この内容で始める</button>
+  </main>
+
+  <main class="view" id="view-rec">
+    <div id="recPurpose" class="rec-purpose" style="display:none"></div>
+    <div id="maskStatus" class="mask-status"></div>
+    <div class="transcript" id="transcript"></div>
+    <div class="rec-empty" id="recEmpty">▶ ボタンを押すと文字起こしが始まります</div>
+    <div class="reczone">
+      <div class="reczone-inner">
+        <button class="recbtn" id="recBtn" onclick="toggleRec()"><span class="dot"></span><span id="recLabel">録音を開始</span></button>
+        <button class="askbtn" id="askBtn" onclick="askFeedback()" disabled>次の一手</button>
+      </div>
+      <button class="btn ghost" style="margin-top:10px;padding:12px" onclick="endMeeting()">会議を終了して議事録を作る</button>
+    </div>
+  </main>
+
+  <main class="view" id="view-detail"><div id="detailBody"></div></main>
+
+  <main class="view" id="view-settings">
+    <div class="field"><label>Gemini APIキー <span class="hint">— 端末内にのみ保存されます</span></label>
+      <input type="text" id="s-key" placeholder="AIza... で始まるキー" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+    <div class="field"><label>使用モデル</label><input type="text" id="s-model" placeholder="gemini-2.5-flash"></div>
+
+    <div class="field">
+      <label>匿名化する語句 <span class="hint">— 登録した語は画面・送信・議事録ですべて記号に置換</span></label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="m-term" placeholder="例）田中／○○市／△△建設" autocomplete="off">
+        <button class="btn" style="width:auto;padding:13px 18px;white-space:nowrap" onclick="addMask()">追加</button>
+      </div>
+      <div id="maskList" style="margin-top:12px"></div>
+    </div>
+
+    <button class="btn" onclick="saveSettings()">保存</button>
+    <div class="note">
+      <b>有料Tier推奨</b><br>
+      Google Cloudで課金を有効にしたプロジェクトのキーを使うと、入力内容がモデル学習に使われません。社内打ち合わせで使うならこちらを。<br><br>
+      <b>モデル名</b><br>
+      gemini-2.0-flash は2026年9月に停止予定です。<code>gemini-2.5-flash</code> など現行のFlash系を指定してください。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">キー取得はこちら</a>。<br><br>
+      <b>音声について（重要）</b><br>
+      文字起こしのWeb Speech APIは音声をGoogleの認識サーバーに送ります。これは匿名化の<b>前段</b>なのでマスクできません。極秘の音声を扱う場では使わない判断を。<br><br>
+      <b>動かない時</b><br>
+      Chrome（Android）が安定。マイクとネット接続が必要です。ホーム画面に追加するとアプリのように使えます。
+    </div>
+  </main>
+</div>
+
+<div class="sheet-mask" id="sheetMask" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-grab"></div>
+  <div class="sheet-head"><h2 id="sheetTitle">次の一手</h2>
+    <button class="x" onclick="closeSheet()" aria-label="閉じる"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+  <div class="tabs" id="adviceTabs"></div>
+  <div class="sheet-body" id="adviceBody"></div>
+</div>
+
+<button class="fab" id="fab" onclick="openNew()" aria-label="新規作成">+</button>
+<div class="toast" id="toast"></div>
+
+<script>
+const LS_MTG='mimimoto.meetings.v1';
+const LS_SET='mimimoto.settings.v2';
+const ROLE_PRESETS=[
+  {id:'sales',label:'営業',perspective:'クロージング、関係構築、提案の説得力、価格・条件の詰め'},
+  {id:'eng',label:'技術',perspective:'技術的な実現性、工数・スケジュール、リスクと前提条件'},
+  {id:'pm',label:'進行/PM',perspective:'論点整理、決定事項と宿題の明確化、抜け漏れの洗い出し'},
+  {id:'biz',label:'経営/契約',perspective:'採算、契約条件、責任分界、リスクの所在'},
+  {id:'gov',label:'自治体対応',perspective:'仕様・要件の確認、根拠資料、納品物の合意、手続きの段取り'},
+];
+const MASK_SYMBOLS=['●●','▲▲','■■','◆◆','★★','▽▽','◇◇','□□','◎◎','♦♦'];
+
+let meetings=load(LS_MTG,[]);
+let settings=load(LS_SET,{key:'',model:'gemini-2.5-flash',maskList:[]});
+if(!settings.maskList) settings.maskList=[];
+if(!settings.model) settings.model='gemini-2.5-flash';
+
+let current=null, selectedRoles=[], recog=null, isRecording=false, wantRecording=false, interimEl=null, wakeLock=null;
+
+function load(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch(e){return fb;}}
+function persist(){try{localStorage.setItem(LS_MTG,JSON.stringify(meetings));}catch(e){toast('保存に失敗しました');}}
+function persistSettings(){try{localStorage.setItem(LS_SET,JSON.stringify(settings));}catch(e){}}
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
+function now(){return Date.now();}
+function fmtTime(ts){const d=new Date(ts);return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);}
+function fmtDate(ts){const d=new Date(ts);return (d.getMonth()+1)+'/'+d.getDate()+' '+fmtTime(ts);}
+
+/* ---- 匿名化（マスク） ---- */
+function nextSymbol(){
+  const used=new Set((settings.maskList||[]).map(m=>m.symbol));
+  for(let i=0;i<999;i++){
+    const base=MASK_SYMBOLS[i%MASK_SYMBOLS.length];
+    const sym=i<MASK_SYMBOLS.length?base:base+(Math.floor(i/MASK_SYMBOLS.length)+1);
+    if(!used.has(sym)) return sym;
+  }
+  return '●●';
+}
+function maskText(s){
+  if(!s) return s;
+  const list=settings.maskList||[];
+  if(list.length===0) return s;
+  let out=s;
+  [...list].sort((a,b)=>b.term.length-a.term.length).forEach(m=>{ if(m.term) out=out.split(m.term).join(m.symbol); });
+  return out;
+}
+function addMask(){
+  const inp=document.getElementById('m-term'); const term=inp.value.trim();
+  if(!term){return;}
+  if((settings.maskList||[]).some(m=>m.term===term)){ toast('登録済みです'); inp.value=''; return; }
+  settings.maskList.push({term,symbol:nextSymbol()}); persistSettings(); inp.value=''; renderMaskList(); toast('追加しました');
+}
+function removeMask(i){ settings.maskList.splice(i,1); persistSettings(); renderMaskList(); }
+function renderMaskList(){
+  const el=document.getElementById('maskList'); if(!el) return;
+  const list=settings.maskList||[];
+  el.innerHTML=list.length===0
+    ? '<div class="hint">まだ登録がありません。隠したい人名・客先名などを追加してください。</div>'
+    : list.map((m,i)=>'<div class="mask-row"><span class="mask-sym">'+m.symbol+'</span><span class="mask-term">'+esc(m.term)+'</span><button class="mask-del" onclick="removeMask('+i+')">削除</button></div>').join('');
+}
+function maskStatusLine(){
+  const n=(settings.maskList||[]).length;
+  const el=document.getElementById('maskStatus');
+  el.innerHTML = (n>0?'🔒 <b>'+n+'件</b>を匿名化中':'🔓 匿名化なし（設定で登録できます）')+' ・ 音声認識はGoogle経由';
+}
+
+/* ---- 画面遷移 ---- */
+const views=['list','new','rec','detail','settings'];
+function openView(name){
+  views.forEach(v=>document.getElementById('view-'+v).classList.toggle('active',v===name));
+  document.getElementById('backBtn').style.display=(name==='list')?'none':'flex';
+  document.getElementById('fab').style.display=(name==='list')?'grid':'none';
+  document.getElementById('settingsBtn').style.display=(name==='settings')?'none':'grid';
+  if(name==='settings'){ loadSettingsUI(); renderMaskList(); }
+  window.scrollTo(0,0);
+}
+function goList(){ if(isRecording){ if(!confirm('録音中です。一覧に戻ると録音は止まります。よろしいですか？')) return; stopRec(); } renderList(); openView('list'); }
+
+/* ---- 一覧 ---- */
+function renderList(){
+  const el=document.getElementById('mtgList');
+  if(meetings.length===0){ el.innerHTML='<div class="empty"><div class="big">🗒️</div>まだ会議がありません。<br>右下の ＋ から始めましょう。</div>'; return; }
+  const sorted=[...meetings].sort((a,b)=>b.createdAt-a.createdAt);
+  el.innerHTML=sorted.map(m=>{
+    const badge=m.status==='live'?'<span class="badge live">録音中</span>':'<span class="badge done">終了</span>';
+    return '<button class="mtg-card" onclick="openMeeting(\''+m.id+'\')"><h3>'+badge+esc(maskText(m.title||'(無題)'))+'</h3>'
+      +'<div class="meta"><span>'+fmtDate(m.createdAt)+'</span><span>'+m.transcripts.length+'発言</span>'
+      +(m.roles.length?'<span>'+m.roles.map(r=>roleLabel(r)).join('・')+'</span>':'')+'</div></button>';
+  }).join('');
+}
+
+/* ---- 新規 ---- */
+function openNew(){ document.getElementById('f-title').value=''; document.getElementById('f-purpose').value=''; selectedRoles=['pm']; renderRoleChips(); openView('new'); }
+function renderRoleChips(){ document.getElementById('roleChips').innerHTML=ROLE_PRESETS.map(r=>'<button class="role-chip '+(selectedRoles.includes(r.id)?'on':'')+'" onclick="toggleRole(\''+r.id+'\')">'+r.label+'</button>').join(''); }
+function toggleRole(id){ selectedRoles.includes(id)?selectedRoles=selectedRoles.filter(x=>x!==id):selectedRoles.push(id); renderRoleChips(); }
+function roleLabel(id){const r=ROLE_PRESETS.find(x=>x.id===id);return r?r.label:id;}
+function rolePersp(id){const r=ROLE_PRESETS.find(x=>x.id===id);return r?r.perspective:'';}
+function createMeeting(){
+  const title=document.getElementById('f-title').value.trim();
+  const purpose=document.getElementById('f-purpose').value.trim();
+  const m={id:uid(),title:title||'(無題)',purpose,roles:[...selectedRoles],status:'live',createdAt:now(),transcripts:[],feedbacks:[],summary:'',summaryStatus:'',summaryFormat:''};
+  meetings.push(m); persist(); openMeeting(m.id);
+}
+function openMeeting(id){ const m=meetings.find(x=>x.id===id); if(!m) return; current=m; m.status==='live'?enterRec(m):enterDetail(m); }
+
+/* ---- 録音 ---- */
+function enterRec(m){
+  const p=document.getElementById('recPurpose');
+  if(m.purpose){ p.style.display='block'; p.textContent='🎯 '+maskText(m.purpose); } else { p.style.display='none'; }
+  maskStatusLine();
+  renderTranscript();
+  document.getElementById('recLabel').textContent='録音を開始';
+  document.getElementById('recBtn').classList.remove('on');
+  document.getElementById('askBtn').disabled=m.transcripts.length===0;
+  openView('rec');
+}
+function renderTranscript(){
+  const el=document.getElementById('transcript');
+  el.innerHTML=current.transcripts.map(t=>'<div class="utt"><time>'+fmtTime(t.at)+'</time>'+esc(maskText(t.text))+'</div>').join('');
+  document.getElementById('recEmpty').style.display=current.transcripts.length?'none':'block';
+  interimEl=null; scrollBottom();
+}
+function scrollBottom(){ requestAnimationFrame(()=>window.scrollTo(0,document.body.scrollHeight)); }
+function getRecognition(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR) return null;
+  const r=new SR(); r.lang='ja-JP'; r.continuous=true; r.interimResults=true;
+  r.onresult=onResult;
+  r.onerror=e=>{ if(e.error==='not-allowed'||e.error==='service-not-allowed'){ toast('マイクの使用が許可されていません'); wantRecording=false; setRecUI(false);} };
+  r.onend=()=>{ if(wantRecording){ try{r.start();}catch(e){ setTimeout(()=>{try{r.start();}catch(_){}} ,300);} } else { setRecUI(false);} };
+  return r;
+}
+function onResult(ev){
+  let interim='';
+  for(let i=ev.resultIndex;i<ev.results.length;i++){
+    const res=ev.results[i];
+    if(res.isFinal){ const text=res[0].transcript.trim(); if(text){ current.transcripts.push({text,at:now()}); persist(); appendFinal(text);} }
+    else interim+=res[0].transcript;
+  }
+  showInterim(interim);
+}
+function appendFinal(text){
+  document.getElementById('recEmpty').style.display='none';
+  if(interimEl){ interimEl.remove(); interimEl=null; }
+  const div=document.createElement('div'); div.className='utt';
+  div.innerHTML='<time>'+fmtTime(now())+'</time>'+esc(maskText(text));
+  document.getElementById('transcript').appendChild(div);
+  document.getElementById('askBtn').disabled=false; scrollBottom();
+}
+function showInterim(text){
+  if(!text){ if(interimEl){interimEl.remove();interimEl=null;} return; }
+  if(!interimEl){ interimEl=document.createElement('div'); interimEl.className='utt interim'; document.getElementById('transcript').appendChild(interimEl); }
+  interimEl.textContent=maskText(text); scrollBottom();
+}
+function toggleRec(){ isRecording?stopRec():startRec(); }
+function startRec(){
+  if(!recog) recog=getRecognition();
+  if(!recog){ toast('この端末は音声認識に未対応です（Chromeをお試しください）'); return; }
+  wantRecording=true;
+  try{ recog.start(); setRecUI(true); requestWake(); }catch(e){ setRecUI(true); }
+}
+function stopRec(){ wantRecording=false; isRecording=false; try{recog&&recog.stop();}catch(e){} setRecUI(false); releaseWake(); }
+function setRecUI(on){ isRecording=on; document.getElementById('recBtn').classList.toggle('on',on); document.getElementById('recLabel').textContent=on?'録音中 — タップで停止':'録音を開始'; }
+async function requestWake(){ try{ if('wakeLock' in navigator){ wakeLock=await navigator.wakeLock.request('screen'); } }catch(e){} }
+function releaseWake(){ try{ wakeLock&&wakeLock.release(); wakeLock=null; }catch(e){} }
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'&&isRecording) requestWake(); });
+
+/* ---- Gemini ---- */
+function geminiReady(){ return settings.key&&settings.key.trim().length>10; }
+async function callGemini(systemText,userText){
+  const model=(settings.model||'gemini-2.5-flash').trim();
+  const url='https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(settings.key.trim());
+  const body={ systemInstruction:{parts:[{text:systemText}]}, contents:[{role:'user',parts:[{text:userText}]}], generationConfig:{temperature:0.4,maxOutputTokens:1500} };
+  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!res.ok){ const t=await res.text().catch(()=> ''); throw new Error('API '+res.status+' '+t.slice(0,160)); }
+  const data=await res.json();
+  const parts=data&&data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts||[];
+  return parts.map(p=>p.text||'').join('').trim();
+}
+
+const RECENT_LIMIT=40;
+async function askFeedback(){
+  if(!geminiReady()){ toast('設定でGemini APIキーを入れてください'); openView('settings'); return; }
+  if(current.transcripts.length===0){ toast('まだ発言がありません'); return; }
+  const roles=current.roles.length?current.roles:['pm'];
+  openSheet(roles,true);
+  const recent=current.transcripts.slice(-RECENT_LIMIT).map(t=>maskText(t.text)).join('\n');
+  const roleList=roles.map(r=>'- '+roleLabel(r)+': '+rolePersp(r)).join('\n');
+  const ctx=current.purpose?'\n会議の目的: '+maskText(current.purpose)+'\n':'';
+  const sys='あなたは会議に同席する優秀なアシスタントです。直近の会話を読み、指定された各ロールの視点から、会議を有利に進めるための簡潔なフィードバックを返してください。'+ctx+'\n出力は必ず次の形式を厳守し、各ロールごとにブロックを作ってください。前置き・締めの文章は不要です。\n\n### ロール名\n- 確認不足 / 次に聞くべき質問: 1〜2個\n- リスク: 該当があれば（なければ「特になし」）\n- 次の一手: そのロールとして取るべきアクション 1〜2個\n\n対象ロール:\n'+roleList;
+  const user='直近の会話ログ:\n'+recent;
+  try{
+    const out=await callGemini(sys,user);
+    const blocks=splitByRole(out,roles);
+    current.feedbacks.push({at:now(),roles:[...roles],blocks,raw:out}); persist();
+    renderSheet(roles,blocks);
+  }catch(e){ renderSheetError(e.message); }
+}
+function splitByRole(text,roles){
+  const map={}; const re=/^###\s*(.+?)\s*$/gm; let m,idxs=[];
+  while((m=re.exec(text))!==null){ idxs.push({name:m[1].trim(),start:m.index,contentStart:re.lastIndex}); }
+  if(idxs.length===0){ roles.forEach((r,i)=>{ map[r]=i===0?text:'（このロールの個別出力は得られませんでした）'; }); return map; }
+  idxs.forEach((it,i)=>{ const end=i+1<idxs.length?idxs[i+1].start:text.length; const body=text.slice(it.contentStart,end).trim(); const role=roles.find(r=>it.name.includes(roleLabel(r))); if(role) map[role]=body; });
+  let pool=idxs.map((it,i)=>{ const end=i+1<idxs.length?idxs[i+1].start:text.length; return text.slice(it.contentStart,end).trim(); });
+  roles.forEach((r,i)=>{ if(!map[r]) map[r]=pool[i]||'（出力なし）'; });
+  return map;
+}
+function openSheet(roles,loading){
+  document.getElementById('sheetMask').classList.add('on'); document.getElementById('sheet').classList.add('on');
+  document.getElementById('adviceTabs').innerHTML=roles.map((r,i)=>'<button class="tab '+(i===0?'on':'')+'" onclick="switchTab(\''+r+'\')">'+roleLabel(r)+'</button>').join('');
+  if(loading) document.getElementById('adviceBody').innerHTML='<div class="gen-wait"><div class="spin"></div>各視点で考えています…</div>';
+}
+function renderSheet(roles,blocks){
+  document.getElementById('adviceBody').innerHTML=roles.map((r,i)=>'<div class="advice-block '+(i===0?'on':'')+'" data-role="'+r+'"><div class="md">'+mdToHtml(blocks[r]||'（出力なし）')+'</div></div>').join('');
+}
+function renderSheetError(msg){ document.getElementById('adviceBody').innerHTML='<div class="gen-wait" style="color:var(--live);border-color:#E8C9C4">取得に失敗しました。<br>'+esc(msg)+'</div>'; }
+function switchTab(role){
+  document.querySelectorAll('#adviceTabs .tab').forEach(t=>t.classList.toggle('on',t.textContent===roleLabel(role)));
+  document.querySelectorAll('#adviceBody .advice-block').forEach(b=>b.classList.toggle('on',b.dataset.role===role));
+}
+function closeSheet(){ document.getElementById('sheetMask').classList.remove('on'); document.getElementById('sheet').classList.remove('on'); }
+
+/* ---- 議事録（簡易 / 詳細） ---- */
+async function endMeeting(){
+  if(current.transcripts.length===0){ if(!confirm('発言がありません。終了しますか？')) return; }
+  if(isRecording) stopRec();
+  current.status='done'; persist();
+  if(!geminiReady()){ current.summaryStatus='none'; persist(); enterDetail(current); toast('議事録の自動生成にはGeminiキーが必要です'); return; }
+  await generateMinutes('simple');
+}
+async function generateMinutes(format){
+  if(!geminiReady()){ toast('Gemini APIキーが必要です'); openView('settings'); return; }
+  current.summaryStatus='processing'; current.summaryFormat=format; persist(); enterDetail(current);
+  const title=maskText(current.title)||'議事録';
+  const log=current.transcripts.map(t=>'['+fmtTime(t.at)+'] '+maskText(t.text)).join('\n');
+  const memo=current.feedbacks.map(f=>maskText(f.raw)).join('\n---\n');
+  const ctx=current.purpose?'会議の目的: '+maskText(current.purpose)+'\n':'';
+  let sys;
+  if(format==='simple'){
+    sys='あなたは議事録作成の専門家です。会話ログから、社内共有用の簡易議事録をMarkdownで作成してください。'+ctx
+      +'\n次の形式を厳守し、各項目は箇条書きで簡潔に（1項目1〜2行）:\n'
+      +'# '+title+'\n'
+      +'- **議題**: \n'
+      +'- **決定事項**: （なければ「特になし」）\n'
+      +'- **ToDo**: 担当が分かれば併記（なければ「特になし」）\n'
+      +'- **次回・確認事項**: （なければ「特になし」）\n'
+      +'ログにない情報は創作しないこと。挨拶や前置きは書かないこと。';
+  }else{
+    sys='あなたは議事録作成の専門家です。会話ログと会議中メモから、読みやすいMarkdownの議事録を作成してください。'+ctx
+      +'構成は次の見出しで:\n# '+title+'\n## 概要（3〜5行）\n## 決定事項\n## ToDo・宿題（担当が分かれば併記）\n## 主な論点・やりとり\n## 次回までの確認事項\n事実に基づき簡潔に。ログにない情報は創作しないこと。';
+  }
+  const user='会話ログ:\n'+log+'\n\n会議中の気づきメモ（参考）:\n'+(memo||'（なし）');
+  try{ const out=await callGemini(sys,user); current.summary=out; current.summaryStatus='done'; }
+  catch(e){ current.summaryStatus='error'; current.summary='⚠ 生成に失敗しました: '+e.message; }
+  persist();
+  if(document.getElementById('view-detail').classList.contains('active')) enterDetail(current);
+}
+
+function enterDetail(m){
+  current=m;
+  const el=document.getElementById('detailBody');
+  const fmtTag=m.summaryFormat==='detailed'?'<span class="fmt-tag">詳細</span>':(m.summaryFormat==='simple'?'<span class="fmt-tag">簡易</span>':'');
+  let summaryHtml='';
+  if(m.summaryStatus==='processing'){
+    summaryHtml='<div class="gen-wait"><div class="spin"></div>議事録を作成中です…</div>';
+  }else if(m.summary){
+    summaryHtml='<div class="md">'+mdToHtml(m.summary)+'</div>';
+  }else if(m.summaryStatus==='none'){
+    summaryHtml='<div class="gen-wait">議事録の自動生成にはGeminiキーが必要です。下の発言ログは残っています。</div>';
+  }
+  const genButtons='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">'
+    +'<button class="btn ghost" style="padding:11px;flex:1;min-width:90px" onclick="generateMinutes(\'simple\')">簡易で作成</button>'
+    +'<button class="btn ghost" style="padding:11px;flex:1;min-width:90px" onclick="generateMinutes(\'detailed\')">詳細で作成</button>'
+    +'<button class="btn ghost" style="padding:11px;flex:1;min-width:90px" onclick="copySummary(\''+m.id+'\')">コピー</button></div>'
+    +'<button class="btn ghost" style="padding:11px;margin-top:8px" onclick="resumeMeeting(\''+m.id+'\')">録音を再開して続ける</button>';
+  const fbHtml=m.feedbacks.length?'<div class="section-h">会議中の提案メモ（'+m.feedbacks.length+'件）</div>'
+    +m.feedbacks.map(f=>'<div class="md" style="margin-bottom:10px"><time style="font-size:11px;color:var(--ink-soft)">'+fmtTime(f.at)+'</time>'+mdToHtml(maskText(f.raw))+'</div>').join(''):'';
+  const logHtml='<div class="section-h">発言ログ（'+m.transcripts.length+'）</div><div class="transcript">'
+    +(m.transcripts.map(t=>'<div class="utt"><time>'+fmtTime(t.at)+'</time>'+esc(maskText(t.text))+'</div>').join('')||'<div class="rec-empty">発言なし</div>')+'</div>';
+  el.innerHTML='<div class="section-h" style="margin-top:4px">議事録'+fmtTag+'</div>'+summaryHtml+genButtons+fbHtml+logHtml
+    +'<button class="btn danger" style="margin-top:24px;padding:12px" onclick="deleteMeeting(\''+m.id+'\')">この会議を削除</button>';
+  openView('detail');
+}
+function copySummary(id){
+  const m=meetings.find(x=>x.id===id); if(!m) return;
+  const text=m.summary||m.transcripts.map(t=>'['+fmtTime(t.at)+'] '+maskText(t.text)).join('\n');
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(()=>toast('コピーしました')).catch(()=>toast('コピーできませんでした')); }
+  else toast('コピーに未対応の環境です');
+}
+function resumeMeeting(id){ const m=meetings.find(x=>x.id===id); if(!m) return; m.status='live'; persist(); enterRec(m); }
+function deleteMeeting(id){ if(!confirm('この会議を削除します。元に戻せません。')) return; meetings=meetings.filter(x=>x.id!==id); persist(); goList(); toast('削除しました'); }
+
+/* ---- 設定 ---- */
+function loadSettingsUI(){
+  document.getElementById('s-key').value=settings.key||'';
+  document.getElementById('s-model').value=settings.model||'gemini-2.5-flash';
+}
+function saveSettings(){
+  settings.key=document.getElementById('s-key').value.trim();
+  settings.model=document.getElementById('s-model').value.trim()||'gemini-2.5-flash';
+  persistSettings(); toast('保存しました'); goList();
+}
+
+/* ---- 小物 ---- */
+function esc(s){ return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function mdToHtml(md){
+  if(!md) return '';
+  const lines=md.replace(/\r/g,'').split('\n'); let html='',inUl=false;
+  const closeUl=()=>{ if(inUl){html+='</ul>';inUl=false;} };
+  const inline=s=>esc(s).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/`(.+?)`/g,'<code>$1</code>');
+  for(let raw of lines){
+    const line=raw.trimEnd();
+    if(/^###\s+/.test(line)){ closeUl(); html+='<h3>'+inline(line.replace(/^###\s+/,''))+'</h3>'; }
+    else if(/^##\s+/.test(line)){ closeUl(); html+='<h2>'+inline(line.replace(/^##\s+/,''))+'</h2>'; }
+    else if(/^#\s+/.test(line)){ closeUl(); html+='<h1>'+inline(line.replace(/^#\s+/,''))+'</h1>'; }
+    else if(/^[-*・]\s+/.test(line)){ if(!inUl){html+='<ul>';inUl=true;} html+='<li>'+inline(line.replace(/^[-*・]\s+/,''))+'</li>'; }
+    else if(line===''){ closeUl(); }
+    else { closeUl(); html+='<p>'+inline(line)+'</p>'; }
+  }
+  closeUl(); return html;
+}
+let toastTimer=null;
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('on'),2200); }
+
+(function init(){ loadSettingsUI(); renderMaskList(); renderList(); openView('list'); window.addEventListener('beforeunload',()=>{ if(isRecording) stopRec(); }); })();
+</script>
+</body>
+</html>
