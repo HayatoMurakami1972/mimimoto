@@ -217,6 +217,9 @@ if(!settings.maskList) settings.maskList=[];
 if(!settings.model) settings.model='gemini-2.5-flash';
 
 let current=null, selectedRoles=[], recog=null, isRecording=false, wantRecording=false, interimEl=null, wakeLock=null;
+/* 音声認識の重複対策用 */
+let lastFinalText='', lastFinalAt=0, expectRestartDup=false;
+const DUP_WINDOW_MS=2500; /* 同一文言がこのms以内に再確定したら二重とみなす */
 
 function load(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch(e){return fb;}}
 function persist(){try{localStorage.setItem(LS_MTG,JSON.stringify(meetings));}catch(e){toast('保存に失敗しました');}}
@@ -326,17 +329,34 @@ function getRecognition(){
   const r=new SR(); r.lang='ja-JP'; r.continuous=true; r.interimResults=true;
   r.onresult=onResult;
   r.onerror=e=>{ if(e.error==='not-allowed'||e.error==='service-not-allowed'){ toast('マイクの使用が許可されていません'); wantRecording=false; setRecUI(false);} };
-  r.onend=()=>{ if(wantRecording){ try{r.start();}catch(e){ setTimeout(()=>{try{r.start();}catch(_){}} ,300);} } else { setRecUI(false);} };
+  r.onend=()=>{ if(wantRecording){ expectRestartDup=true; try{r.start();}catch(e){ setTimeout(()=>{try{r.start();}catch(_){}} ,300);} } else { setRecUI(false);} };
   return r;
 }
 function onResult(ev){
   let interim='';
   for(let i=ev.resultIndex;i<ev.results.length;i++){
     const res=ev.results[i];
-    if(res.isFinal){ const text=res[0].transcript.trim(); if(text){ current.transcripts.push({text,at:now()}); persist(); appendFinal(text);} }
+    if(res.isFinal){
+      const text=res[0].transcript.trim();
+      if(text && !isDuplicateFinal(text)){
+        lastFinalText=text; lastFinalAt=now();
+        current.transcripts.push({text,at:lastFinalAt}); persist(); appendFinal(text);
+      }
+    }
     else interim+=res[0].transcript;
   }
   showInterim(interim);
+}
+/* Chromeは continuous + 自動再起動の境目などで同じ確定結果を二重に返すことがある。
+   直前と同じ文言が「再起動直後」または「短時間内」に来た場合だけ重複として無視する。
+   時間を空けて意図的に同じ言葉を繰り返した場合は通常どおり登録される。 */
+function isDuplicateFinal(text){
+  if(text===lastFinalText){
+    if(expectRestartDup){ expectRestartDup=false; return true; }
+    if(now()-lastFinalAt < DUP_WINDOW_MS) return true;
+  }
+  expectRestartDup=false;
+  return false;
 }
 function appendFinal(text){
   document.getElementById('recEmpty').style.display='none';
@@ -355,6 +375,7 @@ function toggleRec(){ isRecording?stopRec():startRec(); }
 function startRec(){
   if(!recog) recog=getRecognition();
   if(!recog){ toast('この端末は音声認識に未対応です（Chromeをお試しください）'); return; }
+  lastFinalText=''; lastFinalAt=0; expectRestartDup=false;
   wantRecording=true;
   try{ recog.start(); setRecUI(true); requestWake(); }catch(e){ setRecUI(true); }
 }
